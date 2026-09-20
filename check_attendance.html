@@ -772,6 +772,9 @@ async function startScanner(){
   if('BarcodeDetector' in window){
     try{ scannerDetector = new BarcodeDetector({ formats:['qr_code'] }); }catch(e){ scannerDetector = null; }
   }
+  if(typeof jsQR === 'undefined' && !scannerDetector){
+    toast('QR reader library failed to load — check your internet connection.', 'err');
+  }
   box.innerHTML = `
     <video id="scan-video" autoplay playsinline muted></video>
     <div class="scan-frame"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span></div>
@@ -792,20 +795,22 @@ async function scanLoop(){
   if(!video || !scannerStream) return;
   if(!scannerBusy && video.readyState >= 2 && video.videoWidth){
     let payload = null;
-    try{ payload = await detectQr(video); }catch(e){}
+    try{ payload = await detectQr(video); }catch(e){ console.error('QR detect error', e); }
     if(!scannerStream) return; // stopped while detecting
     if(payload) onQrDetected(payload);
   }
   if(scannerStream) scannerRAF = requestAnimationFrame(scanLoop);
 }
 async function detectQr(video){
+  // 1) native detector (fast). Some browsers expose it but never return results,
+  //    so an empty result must NOT stop us from trying jsQR as well.
   if(scannerDetector){
     try{
       const found = await scannerDetector.detect(video);
       if(found && found.length && found[0].rawValue) return found[0].rawValue;
-      return null;
-    }catch(e){ /* fall through to jsQR */ }
+    }catch(e){ scannerDetector = null; } // broken/unsupported → drop it for good
   }
+  // 2) jsQR on every frame (works in all browsers)
   return jsQrDetect(video);
 }
 function jsQrDetect(video){
@@ -830,7 +835,9 @@ function onQrDetected(payload){
   lastPayload = payload; lastPayloadAt = now; // stays "same scan" while the code remains in view
   if(repeat) return;                          // prevents instant check-in → check-out double scans
   scannerBusy = true;
-  handleQrPayload(payload);
+  try{ handleQrPayload(payload); }
+  catch(e){ console.error('QR handling failed', e); }
+  finally{ scannerBusy = false; }
 }
 function stopScanner(silent){
   if(scannerRAF) cancelAnimationFrame(scannerRAF);
